@@ -84,6 +84,16 @@ public:
 };
 #include "unyield.hpp"
 
+inline
+boost::shared_ptr<http_client>
+async_request(boost::asio::io_service& io_service, std::string const& host, std::string const& port, std::string const& path)
+{
+    // Close connection when c's destructor is called.
+    auto c = boost::make_shared<http_client>(io_service, host, port, path);
+    c->start_request();
+    return c;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 4) {
@@ -93,8 +103,7 @@ int main(int argc, char *argv[])
 
     boost::asio::io_service io_service;
 
-    auto c = boost::make_shared<http_client>(io_service, argv[1], argv[2], argv[3]);
-    c->start_request();
+    async_request(io_service, argv[1], argv[2], argv[3]);
 
     io_service.run();
 
