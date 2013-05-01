@@ -75,6 +75,32 @@ public:
         if (port_ != "80")
             cout << ":" << port_;
         cout << path_ << endl;
+
+        std::ostream request_stream(&request_);
+        request_stream << "GET " << path_ << " HTTP/1.0\r\n"
+                          "Host: " << host_ << "\r\n"
+                          "Accept: */*\r\n"
+                          "Connection: close\r\n"
+                          "\r\n"
+                       ;
+
+        boost::asio::async_write(socket_, request_, boost::bind(&self_t::handle_write, shared_from_this(), boost::asio::placeholders::error));
+    }
+
+    void handle_write(boost::system::error_code const& ec)
+    {
+        if (ec)
+            return handle_error(ec);
+
+        boost::asio::async_read(socket_, response_, boost::bind(&self_t::handle_read, shared_from_this(), boost::asio::placeholders::error));
+    }
+
+    void handle_read(boost::system::error_code const& ec)
+    {
+        if (ec)
+            return handle_error(ec);
+
+        cout << boost::asio::buffer_cast<const char *>(response_.data()) << endl;
     }
 
     void handle_error(boost::system::error_code const& ec)
