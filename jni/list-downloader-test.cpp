@@ -1,6 +1,7 @@
 #include <string>
 #include <iostream>
 #include <vector>
+#include <array>
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
 #include <boost/function.hpp>
@@ -9,6 +10,7 @@
 #include <boost/make_shared.hpp>
 #include <boost/bind.hpp>
 #include <boost/spirit/include/qi.hpp>
+#include <boost/range/as_literal.hpp>
 #include "coroutine.hpp"
 
 using namespace std;
@@ -107,21 +109,23 @@ public:
             // Receive status-line
             yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
             {
-                // Check that response is OK.
-                std::istream response_stream(&response_);
-                std::string http_version;
-                response_stream >> http_version;
-                unsigned int status_code;
-                response_stream >> status_code;
-                std::string status_message;
-                std::getline(response_stream, status_message);
-                if (!response_stream || http_version.substr(0, 5) != "HTTP/")
-                {
-                    std::cout << "Invalid response\n";
-                    return;
-                }
-                if (status_code != 200)
-                {
+                using boost::spirit::qi::ascii::digit;
+
+                // Parse chunk size
+                const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
+                const char *last = strstr(iter, "\r\n");
+                unsigned int consume_size = last - iter;
+                auto r = qi::raw[ "HTTP/" >> digit >> "." >> digit ]
+                         >> qi::raw[ qi::repeat(3)[ digit ] ]
+                         >> qi::raw[ *(qi::char_ - "\r") ]
+                         ;
+                boost::iterator_range<const char *> http_version, status_code, message;
+                qi::parse(iter, last, r, http_version, status_code, message);
+
+                // Consume line
+                response_.consume(consume_size);
+
+                if (status_code != boost::as_literal("200")) {
                     std::cout << "Response returned with status code ";
                     std::cout << status_code << "\n";
                     return;
@@ -131,8 +135,7 @@ public:
             // Receive header
             yield boost::asio::async_read_until(socket_, response_, "\r\n\r\n", call_self);
             {
-                using boost::spirit::lexeme;
-                const auto r = lexeme[*(qi::char_ - ":")] >> ":" >> lexeme[*(qi::char_ - "\r")];
+                const auto r = qi::lexeme[ *(qi::char_ - ":") ] >> ":" >> qi::lexeme[ *(qi::char_ - "\r") ];
 
                 // Process the response headers.
                 std::istream response_stream(&response_);
