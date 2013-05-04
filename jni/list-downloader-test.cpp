@@ -155,7 +155,7 @@ public:
                     {
                         // Parse chunk size
                         const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-                        const char *last = strstr(first, "\r\n");
+                        const char *last = strstr(iter, "\r\n");
                         unsigned int consume_size = last - iter;
                         qi::parse(iter, last, qi::hex, chunk_size_);
 
