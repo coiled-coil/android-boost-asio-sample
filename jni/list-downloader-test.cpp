@@ -115,7 +115,7 @@ public:
                 // Parse chunk size
                 const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
                 const char *last = strstr(iter, "\r\n");
-                unsigned int consume_size = last - iter;
+                unsigned int consume_size = last - iter + 2;
                 auto r = qi::raw[ "HTTP/" >> digit >> "." >> digit ]
                          >> qi::raw[ qi::repeat(3)[ digit ] ]
                          >> qi::raw[ *(qi::char_ - "\r") ]
@@ -161,7 +161,7 @@ public:
                         // Parse chunk size
                         const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
                         const char *last = strstr(iter, "\r\n");
-                        unsigned int consume_size = last - iter;
+                        unsigned int consume_size = last - iter + 2;
                         qi::parse(iter, last, qi::hex, chunk_size_);
 
                         // Consume line
