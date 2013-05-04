@@ -154,13 +154,13 @@ public:
                     yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
                     {
                         // Parse chunk size
-                        const char *first, *iter;
-                        first = iter = boost::asio::buffer_cast<const char *>(response_.data());
+                        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
                         const char *last = strstr(first, "\r\n");
-                        qi::parse(first, last, qi::hex, chunk_size_);
+                        unsigned int consume_size = last - iter;
+                        qi::parse(iter, last, qi::hex, chunk_size_);
 
                         // Consume line
-                        response_.consume(last + 2 - first);
+                        response_.consume(consume_size);
                     }
 
                     // read chunk body
@@ -168,9 +168,9 @@ public:
                         yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2), call_self);
                         {
                             const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-                            const char *last = iter + chunk_size_ + 2;
+                            const char *last = iter + chunk_size_;
 
-                            if (! (last[-2] == '\r' && last[-1] == '\n')) {
+                            if (strncmp(last, "\r\n", 2) != 0) {
                                 // error
                             }
 
