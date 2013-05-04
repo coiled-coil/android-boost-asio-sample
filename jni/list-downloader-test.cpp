@@ -110,6 +110,7 @@ public:
             yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
             {
                 using boost::spirit::qi::ascii::digit;
+                using boost::spirit::qi::ascii::space;
 
                 // Parse chunk size
                 const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
@@ -120,7 +121,7 @@ public:
                          >> qi::raw[ *(qi::char_ - "\r") ]
                          ;
                 boost::iterator_range<const char *> http_version, status_code, message;
-                qi::parse(iter, last, r, http_version, status_code, message);
+                qi::phrase_parse(iter, last, r, space, http_version, status_code, message);
 
                 // Consume line
                 response_.consume(consume_size);
@@ -135,6 +136,7 @@ public:
             // Receive header
             yield boost::asio::async_read_until(socket_, response_, "\r\n\r\n", call_self);
             {
+                using boost::spirit::qi::ascii::space;
                 const auto r = qi::lexeme[ *(qi::char_ - ":") ] >> ":" >> qi::lexeme[ *(qi::char_ - "\r") ];
 
                 // Process the response headers.
@@ -143,7 +145,7 @@ public:
                 while (std::getline(response_stream, header) && header != "\r") {
                     std::cout << header << "\n";
                     string key, value;
-                    if (qi::phrase_parse(header.begin(), header.end(), r, qi::space, key, value)) {
+                    if (qi::phrase_parse(header.begin(), header.end(), r, space, key, value)) {
                         if (key == "Transfer-Encoding" && value == "chunked")
                             chunked_ = true;
                     }
