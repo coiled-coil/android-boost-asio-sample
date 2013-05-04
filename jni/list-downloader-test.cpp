@@ -75,6 +75,8 @@ public:
 
     void operator()(boost::system::error_code const& ec)
     {
+        namespace qi = boost::spirit::qi;
+
         if (ec)
             return handle_error(ec);
 
@@ -129,7 +131,6 @@ public:
             // Receive header
             yield boost::asio::async_read_until(socket_, response_, "\r\n\r\n", call_self);
             {
-                namespace qi = boost::spirit::qi;
                 using boost::spirit::lexeme;
                 const auto r = lexeme[*(qi::char_ - ":")] >> ":" >> lexeme[*(qi::char_ - "\r")];
 
@@ -152,25 +153,29 @@ public:
                 while (1) {
                     yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
                     {
-                        std::istream response_stream(&response_);
-                        std::string line;
-                        chunk_size_ = 0;
-                        response_stream >> hex >> chunk_size_;
-                        getline(response_stream, line);
+                        // Parse chunk size
+                        const char *first, *iter;
+                        first = iter = boost::asio::buffer_cast<const char *>(response_.data());
+                        const char *last = strstr(first, "\r\n");
+                        qi::parse(first, last, qi::hex, chunk_size_);
+
+                        // Consume line
+                        response_.consume(last + 2 - first);
                     }
 
                     // read chunk body
                     if (chunk_size_ > 0) {
-                        yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_), call_self);
-                        // do something
-                        response_.consume(chunk_size_);
-
-                        // read chunk separator
-                        yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
+                        yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2), call_self);
                         {
-                            std::istream response_stream(&response_);
-                            std::string line;
-                            getline(response_stream, line);
+                            const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
+                            const char *last = iter + chunk_size_ + 2;
+
+                            if (! (last[-2] == '\r' && last[-1] == '\n')) {
+                                // error
+                            }
+
+                            // do something
+                            response_.consume(chunk_size_ + 2);
                         }
                     }
 
@@ -180,11 +185,13 @@ public:
                         while (1) {
                             yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
                             {
-                                std::istream response_stream(&response_);
-                                std::string line;
-                                getline(response_stream, line);
+                                const char *first = boost::asio::buffer_cast<const char *>(response_.data());
+                                const char *last = strstr(first, "\r\n");
 
-                                if (line == "\r")
+                                // Consume line
+                                response_.consume(last + 2 - first);
+
+                                if (first == last)
                                     goto chunk_finished;
                             }
                         }
