@@ -34,6 +34,7 @@ private:
 
     bool chunked_;
     unsigned int chunk_size_;
+    int content_length_;
 
 public:
     explicit http_client(boost::asio::io_service& io_service, std::string const& host, std::string const& port, std::string const& path)
@@ -47,6 +48,7 @@ public:
     ,   response_()
     ,   chunked_()
     ,   chunk_size_()
+    ,   content_length_(-1)
     {
     }
 
@@ -97,10 +99,10 @@ public:
             // Send request
             yield {
                 std::ostream request_stream(&request_);
-                request_stream << "GET " << path_ << " HTTP/1.0\r\n"
+                request_stream << "GET " << path_ << " HTTP/1.1\r\n"
                                   "Host: " << host_ << "\r\n"
                                   "Accept: */*\r\n"
-                                  "Connection: close\r\n"
+                                  "Connection: keep-alive\r\n"
                                   "\r\n"
                                ;
                 boost::asio::async_write(socket_, request_, call_self);
@@ -148,6 +150,8 @@ public:
                     if (qi::phrase_parse(header.begin(), header.end(), r, space, key, value)) {
                         if (key == "Transfer-Encoding" && value == "chunked")
                             chunked_ = true;
+                        else if (key == "Content-Length")
+                            content_length_ = atoi(value.c_str());
                     }
                 }
                 std::cout << "\n";
@@ -156,6 +160,7 @@ public:
             // Receive body
             if (chunked_) {
                 while (1) {
+                    chunk_size_ = 0;
                     yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
                     {
                         // Parse chunk size
@@ -170,7 +175,9 @@ public:
 
                     // read chunk body
                     if (chunk_size_ > 0) {
-                        yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2), call_self);
+                        if (response_.size() < chunk_size_ + 2) {
+                            yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2 - response_.size()), call_self);
+                        }
                         {
                             const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
                             const char *last = iter + chunk_size_;
@@ -205,6 +212,15 @@ public:
 chunk_finished:
                 ;
             }
+            else if (content_length_ >= 0) {
+                if (response_.size() < content_length_) {
+                    yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(content_length_ - response_.size()), call_self);
+                }
+                cout << "body read finished." << endl;
+                // cout << boost::asio::buffer_cast<const char *>(response_.data()) << endl;
+                // do something
+                response_.consume(content_length_);
+            }
             else {
                 yield boost::asio::async_read(socket_, response_, call_self);
                 // cout << boost::asio::buffer_cast<const char *>(response_.data()) << endl;
@@ -216,7 +232,7 @@ chunk_finished:
 
     void handle_error(boost::system::error_code const& ec)
     {
-        cerr << "Error: " << ec << endl;
+        cout << "Error: " << ec << endl;
     }
 };
 #include "unyield.hpp"
