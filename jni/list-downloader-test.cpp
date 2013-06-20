@@ -77,6 +77,102 @@ public:
             [this_](boost::system::error_code const& ec, tcp::resolver::iterator iterator) { return (*this_)(ec); });
     }
 
+    bool parse_status_line()
+    {
+        namespace qi = boost::spirit::qi;
+
+        using boost::spirit::qi::ascii::digit;
+        using boost::spirit::qi::ascii::space;
+
+        // Parse chunk size
+        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
+        const char *last = strstr(iter, "\r\n");
+        unsigned int consume_size = last - iter + 2;
+        auto r = qi::raw[ "HTTP/" >> digit >> "." >> digit ]
+                 >> qi::raw[ qi::repeat(3)[ digit ] ]
+                 >> qi::raw[ *(qi::char_ - "\r") ]
+                 ;
+        boost::iterator_range<const char *> http_version, status_code, message;
+        qi::phrase_parse(iter, last, r, space, http_version, status_code, message);
+
+        // Consume line
+        response_.consume(consume_size);
+
+        if (status_code != boost::as_literal("200")) {
+            std::cout << "Response returned with status code ";
+            std::cout << status_code << "\n";
+            return false;
+        }
+
+        return true;
+    }
+
+    bool parse_chunk_size()
+    {
+        namespace qi = boost::spirit::qi;
+
+        // Parse chunk size
+        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
+        const char *last = strstr(iter, "\r\n");
+        unsigned int consume_size = last - iter + 2;
+        qi::parse(iter, last, qi::hex, chunk_size_);
+
+        // Consume line
+        response_.consume(consume_size);
+
+        return true;
+    }
+
+    bool parse_headers()
+    {
+        namespace qi = boost::spirit::qi;
+
+        using boost::spirit::qi::ascii::space;
+        const auto r = qi::lexeme[ *(qi::char_ - ":") ] >> ":" >> qi::lexeme[ *(qi::char_ - "\r") ];
+
+        // Process the response headers.
+        std::istream response_stream(&response_);
+        std::string header;
+        while (std::getline(response_stream, header) && header != "\r") {
+            std::cout << "* " << header << "\n";
+            string key, value;
+            if (qi::phrase_parse(header.begin(), header.end(), r, space, key, value)) {
+                if (key == "Transfer-Encoding" && value == "chunked")
+                    chunked_ = true;
+                else if (key == "Content-Length")
+                    content_length_ = atoi(value.c_str());
+            }
+        }
+        std::cout << "\n";
+        return true;
+    }
+
+    bool parse_chunk_body()
+    {
+        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
+        const char *last = iter + chunk_size_;
+
+        if (strncmp(last, "\r\n", 2) != 0) {
+            // error
+        }
+
+        // do something
+        response_.consume(chunk_size_ + 2);
+
+        return true;
+    }
+
+    bool parse_trailer()
+    {
+        const char *first = boost::asio::buffer_cast<const char *>(response_.data());
+        const char *last = strstr(first, "\r\n");
+
+        // Consume line
+        response_.consume(last + 2 - first);
+
+        return !(first == last);
+    }
+
     void operator()(boost::system::error_code const& ec)
     {
         namespace qi = boost::spirit::qi;
@@ -110,85 +206,29 @@ public:
 
             // Receive status-line
             yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-            {
-                using boost::spirit::qi::ascii::digit;
-                using boost::spirit::qi::ascii::space;
-
-                // Parse chunk size
-                const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-                const char *last = strstr(iter, "\r\n");
-                unsigned int consume_size = last - iter + 2;
-                auto r = qi::raw[ "HTTP/" >> digit >> "." >> digit ]
-                         >> qi::raw[ qi::repeat(3)[ digit ] ]
-                         >> qi::raw[ *(qi::char_ - "\r") ]
-                         ;
-                boost::iterator_range<const char *> http_version, status_code, message;
-                qi::phrase_parse(iter, last, r, space, http_version, status_code, message);
-
-                // Consume line
-                response_.consume(consume_size);
-
-                if (status_code != boost::as_literal("200")) {
-                    std::cout << "Response returned with status code ";
-                    std::cout << status_code << "\n";
-                    return;
-                }
-            }
+            if (! parse_status_line())
+                return;
 
             // Receive header
             yield boost::asio::async_read_until(socket_, response_, "\r\n\r\n", call_self);
-            {
-                using boost::spirit::qi::ascii::space;
-                const auto r = qi::lexeme[ *(qi::char_ - ":") ] >> ":" >> qi::lexeme[ *(qi::char_ - "\r") ];
-
-                // Process the response headers.
-                std::istream response_stream(&response_);
-                std::string header;
-                while (std::getline(response_stream, header) && header != "\r") {
-                    std::cout << header << "\n";
-                    string key, value;
-                    if (qi::phrase_parse(header.begin(), header.end(), r, space, key, value)) {
-                        if (key == "Transfer-Encoding" && value == "chunked")
-                            chunked_ = true;
-                        else if (key == "Content-Length")
-                            content_length_ = atoi(value.c_str());
-                    }
-                }
-                std::cout << "\n";
-            }
+            if (! parse_headers())
+                return;
 
             // Receive body
             if (chunked_) {
                 while (1) {
                     chunk_size_ = 0;
                     yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-                    {
-                        // Parse chunk size
-                        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-                        const char *last = strstr(iter, "\r\n");
-                        unsigned int consume_size = last - iter + 2;
-                        qi::parse(iter, last, qi::hex, chunk_size_);
+                    if (! parse_chunk_size())
+                        return;
 
-                        // Consume line
-                        response_.consume(consume_size);
-                    }
-
+cout << "CHUNK SIZE = " << chunk_size_ << endl;
                     // read chunk body
                     if (chunk_size_ > 0) {
                         if (response_.size() < chunk_size_ + 2) {
                             yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2 - response_.size()), call_self);
                         }
-                        {
-                            const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-                            const char *last = iter + chunk_size_;
-
-                            if (strncmp(last, "\r\n", 2) != 0) {
-                                // error
-                            }
-
-                            // do something
-                            response_.consume(chunk_size_ + 2);
-                        }
+                        parse_chunk_body();
                     }
 
                     // last chunk
@@ -196,16 +236,8 @@ public:
                         // read trailer
                         while (1) {
                             yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-                            {
-                                const char *first = boost::asio::buffer_cast<const char *>(response_.data());
-                                const char *last = strstr(first, "\r\n");
-
-                                // Consume line
-                                response_.consume(last + 2 - first);
-
-                                if (first == last)
-                                    goto chunk_finished;
-                            }
+                            if (! parse_trailer())
+                                goto chunk_finished;
                         }
                     }
                 }
@@ -213,6 +245,7 @@ chunk_finished:
                 ;
             }
             else if (content_length_ >= 0) {
+                cout << "content_length = " << content_length_ << " max_size=" << response_.max_size() << endl;
                 if (response_.size() < content_length_) {
                     yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(content_length_ - response_.size()), call_self);
                 }
