@@ -201,20 +201,10 @@ chunk_finished:
                 ;
             }
             else if (content_length_ >= 0) {
-                cout << "content_length = " << content_length_ << " max_size=" << response_.max_size() << endl;
-                if (response_.size() < content_length_) {
-                    yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(content_length_ - response_.size()), call_self);
-                }
-                cout << "body read finished." << endl;
-                // cout << boost::asio::buffer_cast<const char *>(response_.data()) << endl;
-                // do something
-                response_.consume(content_length_);
+                yield network::http_1_1::async_read_body(socket_, response_, content_length_, call_self);
             }
             else {
-                yield boost::asio::async_read(socket_, response_, call_self);
-                // cout << boost::asio::buffer_cast<const char *>(response_.data()) << endl;
-                // do something
-                response_.consume(response_.size());
+                yield network::http_1_1::async_read_body(socket_, response_, call_self);
             }
         }
     }

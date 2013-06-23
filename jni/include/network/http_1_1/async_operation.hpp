@@ -34,7 +34,7 @@ void async_read_trailer(
     auto callback = [&, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
         if (!ec) {
             b.consume(bytes_transferred);
-            more = bytes_transferred == 2;
+            more = bytes_transferred != 2;
         }
 
         handler(ec, bytes_transferred);
@@ -95,6 +95,50 @@ void async_read_chunk_body(
     else {
         callback(boost::system::error_code(), 0);
     }
+}
+
+template<
+    typename AsyncReadStream,
+    typename ReadHandler
+>
+void async_read_body(
+    AsyncReadStream & s,
+    boost::asio::streambuf& b,
+    unsigned int content_length,
+    ReadHandler handler)
+{
+    auto callback = [&, content_length, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        if (!ec)
+            b.consume(content_length);
+
+        handler(ec, bytes_transferred);
+    };
+
+    if (b.size() < content_length) {
+        boost::asio::async_read(s, b, boost::asio::transfer_at_least(content_length - b.size()), callback);
+    }
+    else {
+        callback(boost::system::error_code(), 0);
+    }
+}
+
+template<
+    typename AsyncReadStream,
+    typename ReadHandler
+>
+void async_read_body(
+    AsyncReadStream & s,
+    boost::asio::streambuf& b,
+    ReadHandler handler)
+{
+    auto callback = [&, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        if (!ec)
+            b.consume(b.size());
+
+        handler(ec, bytes_transferred);
+    };
+
+    boost::asio::async_read(s, b, callback);
 }
 
 } // namespace http_1_1
