@@ -11,6 +11,7 @@
 #include <boost/bind.hpp>
 #include <boost/spirit/include/qi.hpp>
 #include <boost/range/as_literal.hpp>
+#include <network/http_1_1/async_operation.hpp>
 #include "coroutine.hpp"
 
 using namespace std;
@@ -35,6 +36,7 @@ private:
     bool chunked_;
     unsigned int chunk_size_;
     int content_length_;
+    bool more_;
 
 public:
     explicit http_client(boost::asio::io_service& io_service, std::string const& host, std::string const& port, std::string const& path)
@@ -49,6 +51,7 @@ public:
     ,   chunked_()
     ,   chunk_size_()
     ,   content_length_(-1)
+    ,   more_()
     {
     }
 
@@ -107,22 +110,6 @@ public:
         return true;
     }
 
-    bool parse_chunk_size()
-    {
-        namespace qi = boost::spirit::qi;
-
-        // Parse chunk size
-        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-        const char *last = strstr(iter, "\r\n");
-        unsigned int consume_size = last - iter + 2;
-        qi::parse(iter, last, qi::hex, chunk_size_);
-
-        // Consume line
-        response_.consume(consume_size);
-
-        return true;
-    }
-
     bool parse_headers()
     {
         namespace qi = boost::spirit::qi;
@@ -145,32 +132,6 @@ public:
         }
         std::cout << "\n";
         return true;
-    }
-
-    bool parse_chunk_body()
-    {
-        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-        const char *last = iter + chunk_size_;
-
-        if (strncmp(last, "\r\n", 2) != 0) {
-            // error
-        }
-
-        // do something
-        response_.consume(chunk_size_ + 2);
-
-        return true;
-    }
-
-    bool parse_trailer()
-    {
-        const char *first = boost::asio::buffer_cast<const char *>(response_.data());
-        const char *last = strstr(first, "\r\n");
-
-        // Consume line
-        response_.consume(last + 2 - first);
-
-        return !(first == last);
     }
 
     void operator()(boost::system::error_code const& ec)
@@ -218,25 +179,20 @@ public:
             if (chunked_) {
                 while (1) {
                     chunk_size_ = 0;
-                    yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-                    if (! parse_chunk_size())
-                        return;
+                    yield network::http_1_1::async_read_chunk_size(socket_, response_, chunk_size_, call_self);
+                    cout << "CHUNK SIZE = " << chunk_size_ << endl;
 
-cout << "CHUNK SIZE = " << chunk_size_ << endl;
                     // read chunk body
                     if (chunk_size_ > 0) {
-                        if (response_.size() < chunk_size_ + 2) {
-                            yield boost::asio::async_read(socket_, response_, boost::asio::transfer_at_least(chunk_size_ + 2 - response_.size()), call_self);
-                        }
-                        parse_chunk_body();
+                        yield network::http_1_1::async_read_chunk_body(socket_, response_, chunk_size_, call_self);
                     }
 
                     // last chunk
                     else {
                         // read trailer
                         while (1) {
-                            yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-                            if (! parse_trailer())
+                            yield network::http_1_1::async_read_trailer(socket_, response_, more_, call_self);
+                            if (! more_)
                                 goto chunk_finished;
                         }
                     }
