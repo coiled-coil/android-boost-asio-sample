@@ -7,5 +7,9 @@ LOCAL_C_INCLUDES += $(BOOST_ROOT)
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/include
 LOCAL_SRC_FILES += list-downloader-test.cpp
 LOCAL_SRC_FILES += boost_system_impl.cpp
-include $(BUILD_EXECUTABLE)
+LOCAL_SRC_FILES += parse_header.c
 
+$(LOCAL_PATH)/parse_header.c: $(LOCAL_PATH)/parse_header.l
+	flex -b -v -o parse_header.c parse_header.l
+
+include $(BUILD_EXECUTABLE)
