@@ -13,6 +13,7 @@
 %x CONTENT_LENGTH
 %x transfer_encoding
 %x connection
+%x SKIP
 
 %{
 #include <parse_header.h>
@@ -31,6 +32,9 @@ enum {
 
 %%
 
+\r\n\r\n {
+    return 0;
+}
 (?i:Content-Length): {
     BEGIN(CONTENT_LENGTH);
 }
@@ -40,10 +44,15 @@ enum {
 (?i:Connection): {
     BEGIN(connection);
 }
-.+ {
-    ;
+. {
+    BEGIN(SKIP);
 }
 
+<SKIP>{
+    .+ {
+        ;
+    }
+}
 <CONTENT_LENGTH>{
     [[:digit:]]+ {
         yyextra->content_length = atoi(yytext);
@@ -63,14 +72,15 @@ enum {
     }
 }
 <*>{
-    . {
-        return TOK_UNKNOWN;
-    }
-    [[:space:]] {
+    [ \t\r] {
         ;
     }
     \n {
         BEGIN(INITIAL);
+    }
+    . {
+        ;
+        // return TOK_UNKNOWN;
     }
 }
 
@@ -81,10 +91,11 @@ enum {
  */
 int parse_header(const char *buf, int len, request_header_t *h)
 {
-    yyscan_t scanner;
+    yyscan_t scanner = NULL;
     yylex_init_extra(h, &scanner);
-    yy_scan_bytes(buf, len, &scanner);
+    YY_BUFFER_STATE buf_state = yy_scan_bytes(buf, len, scanner);
     int ret = yylex(scanner);
+    yy_delete_buffer(buf_state, scanner);
     yylex_destroy(scanner);
 
     return ret;
