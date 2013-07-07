@@ -10,6 +10,6 @@ LOCAL_SRC_FILES += boost_system_impl.cpp
 LOCAL_SRC_FILES += parse_header.c
 
 $(LOCAL_PATH)/parse_header.c: $(LOCAL_PATH)/parse_header.l
-	flex -b -v -o parse_header.c parse_header.l
+	flex -b -v -o $(LOCAL_PATH)/parse_header.c $(LOCAL_PATH)/parse_header.l
 
 include $(BUILD_EXECUTABLE)

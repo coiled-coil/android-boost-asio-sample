@@ -1,7 +1,62 @@
 #pragma once
 
+#include <parse_header.h>
+#include <cstdlib>
+
 namespace network {
 namespace http_1_1 {
+
+template<
+    typename AsyncReadStream,
+    typename ReadHandler
+>
+void async_read_status_line(
+    AsyncReadStream & s,
+    boost::asio::streambuf& b,
+    int& status_code,
+    ReadHandler handler)
+{
+    auto callback = [&, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        if (!ec) {
+            const char *p = boost::asio::buffer_cast<const char *>(b.data());
+            if (strncmp(p, "HTTP/1.", 7) == 0) {
+                if (p[7] == '0' || p[7] == '1') {
+                    if (p[8] == ' ') {
+                        status_code = atoi(p + 9);
+                    }
+                }
+            }
+            b.consume(bytes_transferred);
+        }
+
+        handler(ec, bytes_transferred);
+    };
+
+    boost::asio::async_read_until(s, b, "\r\n", callback);
+}
+
+template<
+    typename AsyncReadStream,
+    typename ReadHandler
+>
+void async_read_header(
+    AsyncReadStream & s,
+    boost::asio::streambuf& b,
+    request_header_t &header,
+    ReadHandler handler)
+{
+    auto callback = [&, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
+        if (!ec) {
+            const char *iter = boost::asio::buffer_cast<const char *>(b.data());
+            parse_header(iter, bytes_transferred, &header);
+            b.consume(bytes_transferred);
+        }
+
+        handler(ec, bytes_transferred);
+    };
+
+    boost::asio::async_read_until(s, b, "\r\n\r\n", callback);
+}
 
 /*
     rfc2616 $3.6.1 Chunked Transfer Coding
@@ -53,14 +108,14 @@ void async_read_chunk_size(
     unsigned int& chunk_size,
     ReadHandler handler)
 {
-    namespace qi = boost::spirit::qi;
+    using std::strtoul;
 
     auto callback = [&, handler](const boost::system::error_code& ec, std::size_t bytes_transferred) {
         if (!ec) {
             // Parse chunk size
             const char *iter = boost::asio::buffer_cast<const char *>(b.data());
-            const char *last = iter + bytes_transferred - 2;
-            qi::parse(iter, last, qi::hex, chunk_size);
+            char *last;
+            chunk_size = strtoul(iter, &last, 16);
 
             // Consume line
             b.consume(bytes_transferred);

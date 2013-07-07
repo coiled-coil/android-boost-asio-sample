@@ -4,16 +4,19 @@
 %option nounput
 %option reentrant
 /* %option stack */
+%option extra-type="request_header_t *"
 
 /* CAUTION: option order is important */
 %option fast
 %option ecs
 
-%x content_length
+%x CONTENT_LENGTH
 %x transfer_encoding
 %x connection
 
 %{
+#include <parse_header.h>
+
 enum {
     TOK_UNKNOWN,
     TOK_CONTENT_LENGTH,
@@ -28,36 +31,61 @@ enum {
 
 %%
 
-(?i:Content-Length):[[:space:]]* {
-    BEGIN(content_length);
-    return TOK_CONTENT_LENGTH;
+(?i:Content-Length): {
+    BEGIN(CONTENT_LENGTH);
 }
-(?i:Transfer-Encoding):[[:space:]]* {
+(?i:Transfer-Encoding): {
     BEGIN(transfer_encoding);
-    return TOK_TRANSFER_ENCODING;
 }
-(?i:Connection):[[:space:]]* {
+(?i:Connection): {
     BEGIN(connection);
-    return TOK_CONNECTION;
 }
-<content_length>{
+.+ {
+    ;
+}
+
+<CONTENT_LENGTH>{
     [[:digit:]]+ {
-        return TOK_INTEGER;
+        yyextra->content_length = atoi(yytext);
     }
 }
 <transfer_encoding>{
     chunked {
-        return TOK_CHUNKED;
+        yyextra->chunked = 1;
     }
 }
 <connection>{
     close {
-        return TOK_CLOSE;
+        yyextra->keep_alive = 0;
     }
     keep-alive {
-        return TOK_KEEP_ALIVE;
+        yyextra->keep_alive = 1;
     }
 }
-<*>.|\n   return TOK_UNKNOWN;
+<*>{
+    . {
+        return TOK_UNKNOWN;
+    }
+    [[:space:]] {
+        ;
+    }
+    \n {
+        BEGIN(INITIAL);
+    }
+}
 
 %%
+
+/*
+ * http://flex.sourceforge.net/manual/
+ */
+int parse_header(const char *buf, int len, request_header_t *h)
+{
+    yyscan_t scanner;
+    yylex_init_extra(h, &scanner);
+    yy_scan_bytes(buf, len, &scanner);
+    int ret = yylex(scanner);
+    yylex_destroy(scanner);
+
+    return ret;
+}

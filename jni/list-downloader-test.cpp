@@ -9,9 +9,9 @@
 #include <boost/enable_shared_from_this.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/bind.hpp>
-#include <boost/spirit/include/qi.hpp>
 #include <boost/range/as_literal.hpp>
 #include <network/http_1_1/async_operation.hpp>
+#include <parse_header.h>
 #include "coroutine.hpp"
 
 using namespace std;
@@ -33,9 +33,9 @@ private:
     boost::asio::streambuf request_;
     boost::asio::streambuf response_;
 
-    bool chunked_;
+    int status_code_;
     unsigned int chunk_size_;
-    int content_length_;
+    request_header_t header_;
     bool more_;
 
 public:
@@ -48,11 +48,12 @@ public:
     ,   socket_(io_service)
     ,   request_()
     ,   response_()
-    ,   chunked_()
+    ,   status_code_()
     ,   chunk_size_()
-    ,   content_length_(-1)
+    ,   header_()
     ,   more_()
     {
+        header_.content_length = -1;
     }
 
     http_client(http_client&&) = default;
@@ -80,64 +81,8 @@ public:
             [this_](boost::system::error_code const& ec, tcp::resolver::iterator iterator) { return (*this_)(ec); });
     }
 
-    bool parse_status_line()
-    {
-        namespace qi = boost::spirit::qi;
-
-        using boost::spirit::qi::ascii::digit;
-        using boost::spirit::qi::ascii::space;
-
-        // Parse chunk size
-        const char *iter = boost::asio::buffer_cast<const char *>(response_.data());
-        const char *last = strstr(iter, "\r\n");
-        unsigned int consume_size = last - iter + 2;
-        auto r = qi::raw[ "HTTP/" >> digit >> "." >> digit ]
-                 >> qi::raw[ qi::repeat(3)[ digit ] ]
-                 >> qi::raw[ *(qi::char_ - "\r") ]
-                 ;
-        boost::iterator_range<const char *> http_version, status_code, message;
-        qi::phrase_parse(iter, last, r, space, http_version, status_code, message);
-
-        // Consume line
-        response_.consume(consume_size);
-
-        if (status_code != boost::as_literal("200")) {
-            std::cout << "Response returned with status code ";
-            std::cout << status_code << "\n";
-            return false;
-        }
-
-        return true;
-    }
-
-    bool parse_headers()
-    {
-        namespace qi = boost::spirit::qi;
-
-        using boost::spirit::qi::ascii::space;
-        const auto r = qi::lexeme[ *(qi::char_ - ":") ] >> ":" >> qi::lexeme[ *(qi::char_ - "\r") ];
-
-        // Process the response headers.
-        std::istream response_stream(&response_);
-        std::string header;
-        while (std::getline(response_stream, header) && header != "\r") {
-            std::cout << "* " << header << "\n";
-            string key, value;
-            if (qi::phrase_parse(header.begin(), header.end(), r, space, key, value)) {
-                if (key == "Transfer-Encoding" && value == "chunked")
-                    chunked_ = true;
-                else if (key == "Content-Length")
-                    content_length_ = atoi(value.c_str());
-            }
-        }
-        std::cout << "\n";
-        return true;
-    }
-
     void operator()(boost::system::error_code const& ec)
     {
-        namespace qi = boost::spirit::qi;
-
         if (ec)
             return handle_error(ec);
 
@@ -147,7 +92,6 @@ public:
         };
         reenter(this) {
             // Initialize
-            chunked_ = false;
             cout << "Connected: http://" << host_;
             if (port_ != "80")
                 cout << ":" << port_;
@@ -166,17 +110,13 @@ public:
             }
 
             // Receive status-line
-            yield boost::asio::async_read_until(socket_, response_, "\r\n", call_self);
-            if (! parse_status_line())
-                return;
+            yield network::http_1_1::async_read_status_line(socket_, response_, status_code_, call_self);
 
             // Receive header
-            yield boost::asio::async_read_until(socket_, response_, "\r\n\r\n", call_self);
-            if (! parse_headers())
-                return;
+            yield network::http_1_1::async_read_header(socket_, response_, header_, call_self);
 
             // Receive body
-            if (chunked_) {
+            if (header_.chunked) {
                 while (1) {
                     chunk_size_ = 0;
                     yield network::http_1_1::async_read_chunk_size(socket_, response_, chunk_size_, call_self);
@@ -200,8 +140,8 @@ public:
 chunk_finished:
                 ;
             }
-            else if (content_length_ >= 0) {
-                yield network::http_1_1::async_read_body(socket_, response_, content_length_, call_self);
+            else if (header_.content_length >= 0) {
+                yield network::http_1_1::async_read_body(socket_, response_, header_.content_length, call_self);
             }
             else {
                 yield network::http_1_1::async_read_body(socket_, response_, call_self);
