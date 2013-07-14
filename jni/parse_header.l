@@ -5,6 +5,7 @@
 %option reentrant
 /* %option stack */
 %option extra-type="request_header_t *"
+/* %option yylineno */
 
 /* CAUTION: option order is important */
 %option fast
