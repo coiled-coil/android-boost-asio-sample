@@ -22,21 +22,20 @@ using namespace std;
 using boost::asio::ip::tcp;
 
 #include <boost/asio/yield.hpp>
-template <
-    typename ResponseHandler  // handler(boost::asio::error_code ec, const char *buf, size_t length)
->
 class http_client_1_1
 :   public http_client
-,   public boost::enable_shared_from_this<http_client_1_1<ResponseHandler>>
+,   public boost::enable_shared_from_this<http_client_1_1>
 ,   private boost::asio::coroutine
 {
 private:
     typedef http_client_1_1 self_t;
 
 private:
-    ResponseHandler response_handler_;
+    request_handler_t request_handler_;
+    response_handler_t response_handler_;
+
     boost::asio::io_service& io_service_;
-    std::string host_, port_, path_;
+    std::string host_, port_;
     tcp::resolver resolver_;
     tcp::socket socket_;
     boost::asio::streambuf request_;
@@ -49,12 +48,12 @@ private:
     bool more_;
 
 public:
-    explicit http_client_1_1(boost::asio::io_service& io_service, std::string const& host, std::string const& port, std::string const& path, ResponseHandler&& response_handler)
-    :   response_handler_(response_handler)
+    explicit http_client_1_1(boost::asio::io_service& io_service, std::string const& host, std::string const& port)
+    :   request_handler_()
+    ,   response_handler_()
     ,   io_service_(io_service)
     ,   host_(host)
     ,   port_(port)
-    ,   path_(path)
     ,   resolver_(io_service)
     ,   socket_(io_service)
     ,   request_()
@@ -74,13 +73,22 @@ public:
     http_client_1_1& operator=(http_client_1_1 const&) = delete;
     http_client_1_1& operator=(http_client_1_1&&) = default;
 
-    void start_request()
+    void start(request_handler_t&& request_handler, response_handler_t&& response_handler)
     {
+        request_handler_ = request_handler;
+        response_handler_ = response_handler;
+
         tcp::resolver::query query(host_, port_);
         resolver_.async_resolve(query,
             boost::bind(&self_t::handle_resolve, this->shared_from_this(),
                 boost::asio::placeholders::error,
                 boost::asio::placeholders::iterator));
+    }
+
+    void cancel() override
+    {
+        boost::system::error_code ec;
+        socket_.cancel(ec);
     }
 
     void handle_resolve(boost::system::error_code const& ec, tcp::resolver::iterator endpoint_iterator)
@@ -107,17 +115,13 @@ public:
             cout << "Connected: http://" << host_;
             if (port_ != "80")
                 cout << ":" << port_;
-            cout << path_ << endl;
+            request_handler_(this, cout, host_, port_);
+            cout << endl;
 
             // Send request
             yield {
                 std::ostream request_stream(&request_);
-                request_stream << "GET " << path_ << " HTTP/1.1\r\n"
-                                  "Host: " << host_ << "\r\n"
-                                  "Accept: */*\r\n"
-                                  "Connection: keep-alive\r\n"
-                                  "\r\n"
-                               ;
+                request_handler_(this, request_stream, host_, port_);
                 boost::asio::async_write(socket_, request_, call_self);
             }
 
@@ -153,25 +157,25 @@ cout << "HEADER: content_length=" << header_.content_length << " chunked=" << he
                     }
                 }
 chunk_finished:
-                response_handler_(ec, buffer_);
+                response_handler_(this, ec, buffer_);
                 ;
             }
             else if (header_.content_length >= 0) {
                 buffer_.clear();
                 yield network::http_1_1::async_read_body(socket_, response_, header_.content_length, &buffer_, call_self);
-                response_handler_(ec, buffer_);
+                response_handler_(this, ec, buffer_);
             }
             else {
                 buffer_.clear();
                 yield network::http_1_1::async_read_body(socket_, response_, &buffer_, call_self);
-                response_handler_(ec, buffer_);
+                response_handler_(this, ec, buffer_);
             }
         }
     }
 
     void handle_error(boost::system::error_code const& ec)
     {
-        response_handler_(ec, buffer_);
+        response_handler_(this, ec, buffer_);
         cout << "Error: " << ec << endl;
     }
 };

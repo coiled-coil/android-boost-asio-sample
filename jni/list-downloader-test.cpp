@@ -9,6 +9,7 @@
 #include <boost/bind.hpp>
 #include <boost/range/as_literal.hpp>
 #include <network/async_http_request.hpp>
+#include <network/connection_pool.hpp>
 
 using namespace std;
 
@@ -21,8 +22,8 @@ int main(int argc, char *argv[])
 
     boost::asio::io_service io_service;
 
-    boost::shared_ptr<network::http_client> c = network::async_http_request(io_service, argv[1], argv[2], argv[3],
-        [](::boost::system::error_code ec, std::vector<char>& buf) {
+    boost::shared_ptr<network::http_client> c = network::async_http_get(io_service, argv[1], argv[2], argv[3],
+        [](network::http_client *, ::boost::system::error_code ec, std::vector<char>& buf) {
             if (ec) {
                 cout << ec <<endl;
                 return;
