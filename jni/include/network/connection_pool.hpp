@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <tuple>
 #include <boost/weak_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/make_shared.hpp>
@@ -9,47 +10,73 @@
 
 namespace network {
 
-using http_job_t = std::pair<request_handler_t, response_handler_t>;
+struct http_job_t
+{
+    request_handler_t request_handler;
+    response_handler_t response_handler;
+
+    http_job_t(request_handler_t const& request_handler0, response_handler_t const& response_handler0)
+    :   request_handler(request_handler0)
+    ,   response_handler(response_handler0)
+    {}
+
+    http_job_t(request_handler_t&& request_handler0, response_handler_t&& response_handler0)
+    :   request_handler(std::move(request_handler0))
+    ,   response_handler(std::move(response_handler0))
+    {}
+
+    http_job_t() = default;
+    http_job_t(http_job_t const&) = default;
+    http_job_t(http_job_t&&) = default;
+    http_job_t& operator=(http_job_t const&) = default;
+    http_job_t& operator=(http_job_t&&) = default;
+
+#if 0
+    void swap(http_job_t& other)
+    {
+        request_handler.swap(other.request_handler);
+        response_handler.swap(other.response_handler);
+    }
+#endif
+};
+
 class connection_pool;
 
 #include <boost/asio/yield.hpp>
 class task_t : private boost::asio::coroutine
 {
 public:
-    explicit task_t(boost::asio::io_service& io_service, std::string const& host, std::string const& port, std::vector<http_job_t>& request_queue)
+    explicit task_t(boost::asio::io_service& io_service, std::vector<http_job_t>& request_queue, boost::shared_ptr<http_client> client)
     :   io_service_(io_service)
-    ,   host_(host)
-    ,   port_(port)
     ,   request_queue_(request_queue)
-    ,   client_(make_http_client(io_service, host, port))
+    ,   client_(client)
     {
-        std::vector<char> dummy;
-        (*this)(&client_, boost::system::error_code(), dummy);
     }
 
-    void operator()(http_client *client, boost::system::error_code ec, std::vector<char>& buf)
+    task_t(task_t&&) = default;
+    task_t(task_t const&) = default;
+
+    void operator()(http_client *client = 0, boost::system::error_code ec = {}, std::vector<char>& buf = dummy())
     {
         reenter(this) {
-
             while ( !request_queue_.empty()) {
-                http_job_t job = request_queue_.back();
-                request_handler_t& request_handler = job.first;
-                response_handler_t& response_handler = job.second;
-
-
-                yield client->start(request_handler, *this);
-                response_handler();
+                current_job_ = std::move(request_queue_.back());
                 request_queue_.pop_back();
+
+                yield client->start(std::move(current_job_.request_handler), std::move(*this));
+                current_job_.response_handler(client, ec, buf);
             }
         }
     }
 
 private:
+    static std::vector<char>& dummy() { static std::vector<char> x; return x; }
+
+private:
     boost::asio::io_service& io_service_;
-    std::string const& host_;
-    std::string const& port_;
     std::vector<http_job_t>& request_queue_;
     boost::shared_ptr<http_client> client_;
+    http_job_t current_job_;
 };
 #include <boost/asio/unyield.hpp>
 
@@ -65,26 +92,24 @@ public:
     {
     }
 
+    struct is_expired
+    {
+        template <typename Value>
+        bool operator()(Value const& p) const { return p.expired(); }
+    };
+
     void add(request_handler_t&& request_handler, response_handler_t&& response_handler)
     {
-        for (auto& p : pool_) {
-            if (p.expired()) {
-                p = async_http_request(io_service_, host_, port_, std::move(request_handler),
-                    [this, response_handler](http_client *client, boost::system::error_code ec, std::vector<char>& buf) {
-                        response_handler(client, ec, buf);
+        request_queue_.emplace_back(request_handler, response_handler);
 
-                        if (! request_queue_.empty()) {
-                            http_job_t job = request_queue_.back();
-                            client->start(std::move(job.first), std::move(job.second));
-                            request_queue_.pop_back();
-                        }
-                    }
-                );
-                return;
-            }
+        auto ite = std::find_if(pool_.begin(), pool_.end(), is_expired());
+        if (ite != pool_.end()) {
+            auto client = make_http_client(io_service_, host_, port_);
+            *ite = client;
+            task_t task(io_service_, request_queue_, std::move(client));
+            task();
         }
 
-        request_queue_.push_back(std::make_pair(request_handler, response_handler));
     }
 
 #if 0
